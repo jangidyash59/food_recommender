@@ -112,9 +112,22 @@ st.header("🍛 Step 1 • Choose Your Action")
 choice = st.radio("Select an option:", ["🍴 Food Recommendation", "⭐ Top Picks"])
 
 # -------------------- FOOD RECOMMENDATION --------------------
+# -------------------- FOOD RECOMMENDATION --------------------
 if choice == "🍴 Food Recommendation":
     st.subheader("🍴 Food Recommendation (Restaurant-level)")
-    food_input = st.text_input("Enter a Dish Name:")
+
+    # --- Dropdown list of all food items (editable + searchable) ---
+    unique_dishes = sorted(food_df["name_norm"].dropna().unique().tolist())
+    unique_dishes_display = [name.title() for name in unique_dishes]
+
+    # Editable dropdown with auto-suggestions
+    food_input = st.selectbox(
+        "Enter or Select a Dish Name:",
+        options=[""] + unique_dishes_display,
+        index=0,
+        help="Start typing to search for a dish (auto-suggestions enabled)"
+    ).strip()
+
     diet_choice = st.selectbox("Filter by Diet Type:", ["Both", "Vegetarian", "Non Vegetarian"])
 
     # determine available state prefixes from loaded restaurant files
@@ -125,33 +138,36 @@ if choice == "🍴 Food Recommendation":
         state_display_map = {p: p.replace("_", " ").title() for p in available_state_prefixes}
 
         # --- AUTO-SELECT STATE BASED ON typed item ---
-        # compute total counts of the typed item across all restaurants grouped by state prefix
         default_index = 0
-        if food_input and food_input.strip():
-            item = food_input.strip().lower()
+        if food_input:
+            item = food_input.lower()
             state_counts = {}
             for prefix in available_state_prefixes:
                 total = 0
                 for rest in restaurants_by_state(prefix):
                     total += get_item_count(restaurants[rest], item)
                 state_counts[prefix] = total
-            # pick prefix with max total (if tie, first encountered)
-            max_prefix = max(state_counts.items(), key=lambda x: x[1])[0] if state_counts else None
-            if max_prefix and state_counts.get(max_prefix, 0) > 0:
-                try:
-                    default_index = available_state_prefixes.index(max_prefix)
-                    st.info(f"Auto-selected state: {state_display_map[max_prefix]} (most transactions for '{food_input.title()}').")
-                except ValueError:
-                    default_index = 0
-            else:
-                # no transactions anywhere -> default remains 0
-                default_index = 0
 
-        # render selectbox with computed default index
-        state_choice_prefix = st.selectbox("Select State:", available_state_prefixes, index=default_index, format_func=lambda x: state_display_map[x])
+            if any(state_counts.values()):
+                # State with max transactions
+                max_prefix = max(state_counts, key=state_counts.get)
+                default_index = available_state_prefixes.index(max_prefix)
+                st.info(
+                    f"✅ Auto-selected state: **{state_display_map[max_prefix]}** — most transactions found for '{food_input.title()}'."
+                )
+            else:
+                st.warning(f"No transactions found for '{food_input.title()}' in any state.")
+
+        # --- State dropdown (auto-selected) ---
+        state_choice_prefix = st.selectbox(
+            "Select State:",
+            available_state_prefixes,
+            index=default_index,
+            format_func=lambda x: state_display_map[x]
+        )
         state_choice = state_display_map[state_choice_prefix]
 
-        # --- Find Top Restaurants button (unchanged behavior) ---
+        # --- Find Top Restaurants button ---
         if st.button("🔍 Find Top Restaurants"):
             state_restaurants = restaurants_by_state(state_choice_prefix)
             rest_counts = [(r, get_item_count(restaurants[r], food_input)) for r in state_restaurants]
@@ -163,7 +179,6 @@ if choice == "🍴 Food Recommendation":
                 st.session_state.top2_query_dish = None
                 st.session_state.top2_state = None
             else:
-                # unified table: show all restaurant counts and mark top 2 with ⭐
                 sorted_counts = sorted(rest_counts, key=lambda x: x[1], reverse=True)
                 top2_names = [r[0] for r in sorted_counts[:2]]
                 unified_table = []
@@ -176,10 +191,10 @@ if choice == "🍴 Food Recommendation":
 
                 top2 = [r for r in sorted_counts[:2] if r[1] > 0]
                 st.session_state.top2_for_query = top2
-                st.session_state.top2_query_dish = food_input.strip().lower()
+                st.session_state.top2_query_dish = food_input.lower()
                 st.session_state.top2_state = state_choice_prefix
 
-        # show recommendations automatically after top2 persisted
+        # --- Show recommendations for top 2 ---
         if st.session_state.top2_for_query:
             top2 = st.session_state.top2_for_query
             choice_list = [r[0] for r in top2]
@@ -187,9 +202,17 @@ if choice == "🍴 Food Recommendation":
 
             if restaurant_choice and st.session_state.top2_query_dish:
                 rdf = restaurants[restaurant_choice]
-                rules = run_fp_with_fallback(rdf)
+
+                # 🔁 Run FP-Growth with dynamic support adjustment
+                supports = [0.1, 0.05, 0.02, 0.01, 0.005, 0.001]
+                rules = pd.DataFrame()
+                for s in supports:
+                    rules = run_fp_with_fallback(rdf, supports=(s,))
+                    if not rules.empty:
+                        break
+
                 if rules.empty:
-                    st.warning(f"No frequent patterns found for {restaurant_choice}.")
+                    st.warning(f"No frequent combinations found for '{food_input.title()}' in {restaurant_choice} even at minimum support.")
                 else:
                     item = st.session_state.top2_query_dish
                     mask = rules.apply(
@@ -198,6 +221,22 @@ if choice == "🍴 Food Recommendation":
                         axis=1
                     )
                     matched = rules[mask]
+
+                    # If no direct combinations found, lower support dynamically and retry
+                    if matched.empty:
+                        for s in [0.001, 0.0005, 0.0001]:
+                            rules = run_fp_with_fallback(rdf, supports=(s,))
+                            if not rules.empty:
+                                mask = rules.apply(
+                                    lambda row: item in [i.lower() for i in list(row["antecedents"])]
+                                                or item in [i.lower() for i in list(row["consequents"])],
+                                    axis=1
+                                )
+                                matched = rules[mask]
+                                if not matched.empty:
+                                    st.info(f"📉 Auto-adjusted support to {s} for better results.")
+                                    break
+
                     if matched.empty:
                         st.warning(f"No frequent combinations found for '{item.title()}' in {restaurant_choice}.")
                     else:
@@ -251,6 +290,7 @@ if choice == "🍴 Food Recommendation":
         st.markdown("- 🟡 **Yellow** = Top 5 items across restaurants in the selected state.")
 
 # -------------------- TOP PICKS SECTION (unchanged) --------------------
+# -------------------- TOP PICKS SECTION (with auto support adjustment) --------------------
 else:
     st.subheader("⭐ Top Picks by State / Restaurant")
     diet_choice = st.selectbox("Filter by Diet Type:", ["Both", "Vegetarian", "Non Vegetarian"])
@@ -314,9 +354,19 @@ else:
 
             if st.button("🍽️ Get Recommendations from Top Pick"):
                 rdf = restaurants[restaurant_choice]
-                rules = run_fp_with_fallback(rdf)
+
+                # 🔁 Run FP-Growth with dynamic support adjustment
+                supports = [0.1, 0.05, 0.02, 0.01, 0.005, 0.001]
+                rules = pd.DataFrame()
+                used_support = None
+                for s in supports:
+                    rules = run_fp_with_fallback(rdf, supports=(s,))
+                    if not rules.empty:
+                        used_support = s
+                        break
+
                 if rules.empty:
-                    st.warning(f"No frequent patterns found for {restaurant_choice}.")
+                    st.warning(f"No frequent combinations found for '{raw_item.title()}' in {restaurant_choice} even at minimum support.")
                 else:
                     item = raw_item
                     mask = rules.apply(
@@ -325,18 +375,37 @@ else:
                         axis=1
                     )
                     matched = rules[mask]
+
+                    # If none found, lower support automatically
                     if matched.empty:
-                        st.warning(f"No frequent combinations found for '{chosen_item}' in {restaurant_choice}.")
+                        for s in [0.001, 0.0005, 0.0001]:
+                            rules = run_fp_with_fallback(rdf, supports=(s,))
+                            if not rules.empty:
+                                mask = rules.apply(
+                                    lambda row: item in [i.lower() for i in list(row["antecedents"])]
+                                                or item in [i.lower() for i in list(row["consequents"])],
+                                    axis=1
+                                )
+                                matched = rules[mask]
+                                if not matched.empty:
+                                    st.info(f"📉 Auto-adjusted support to {s} for better results.")
+                                    used_support = s
+                                    break
+
+                    if matched.empty:
+                        st.warning(f"No frequent combinations found for '{item.title()}' in {restaurant_choice}.")
                     else:
                         top_rest3 = [i[0] for i in top_items_in_restaurant(rdf, top_n=3)]
                         state_top5 = set()
                         for r in state_restaurants:
                             state_top5.update([i[0] for i in top_items_in_restaurant(restaurants[r], top_n=5)])
+
                         suggestions = set()
                         for _, rrow in matched.iterrows():
                             for it in list(rrow["antecedents"]) + list(rrow["consequents"]):
                                 if it.lower() != item:
                                     suggestions.add(it.lower())
+
                         rows = []
                         for s in suggestions:
                             cnt = get_item_count(rdf, s)
@@ -361,12 +430,10 @@ else:
                             if diet_choice.lower() != "both":
                                 df_out = df_out[df_out["Diet"].str.lower() == diet_choice.lower()]
                                 df_out = df_out.drop(columns=["Diet"], errors="ignore")
-                            st.success(f"🍽️ Recommendations for '{chosen_item}' in {restaurant_choice}:")
+                            msg = f"🍽️ Recommendations for '{item.title()}' in {restaurant_choice}"
+                            if used_support:
+                                msg += f" (min_support={used_support})"
+                            st.success(msg + ":")
                             st.dataframe(df_out.reset_index(drop=True))
-
-# -------------------- APP FOOTER LEGEND --------------------
-st.markdown("---")
-st.markdown("**Legend (global):**")
-st.markdown("- 🟣 **Purple** = Top 3 items in the selected restaurant.")
-st.markdown("- 🟡 **Yellow** = Top 5 items across restaurants in the selected state.")
-st.markdown("- ⭐ **Gold** = One of the Top 2 restaurants for the chosen dish (Food Recommendation page only).")
+                        else:
+                            st.warning(f"No related items found for '{item.title()}' in {restaurant_choice}.")
