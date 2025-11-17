@@ -4,6 +4,7 @@ import re
 import warnings
 from io import BytesIO
 from typing import Dict, List, Optional, Sequence, Tuple
+from urllib.parse import quote
 
 import pandas as pd
 import streamlit as st
@@ -532,6 +533,44 @@ def build_table_snapshot(
     return buffer.getvalue()
 
 
+from urllib.parse import quote
+def df_to_ascii_table(df: pd.DataFrame) -> str:
+    """Convert DataFrame to a simple clean ASCII table."""
+    import re
+
+    # Remove non-ASCII chars
+    def clean(text):
+        return re.sub(r"[^\x00-\x7F]+", "", str(text))
+
+    headers = [clean(h) for h in df.columns]
+    rows = [[clean(c) for c in row] for row in df.to_numpy()]
+
+    # Determine column widths
+    col_widths = [len(h) for h in headers]
+    for row in rows:
+        for i, cell in enumerate(row):
+            col_widths[i] = max(col_widths[i], len(cell))
+
+    # Build divider
+    divider = "+" + "+".join("-" * (w + 2) for w in col_widths) + "+"
+
+    # Build header
+    header_row = "|" + "|".join(
+        f" {headers[i].ljust(col_widths[i])} " for i in range(len(headers))
+    ) + "|"
+
+    # Build body
+    body_rows = []
+    for row in rows:
+        body_rows.append(
+            "|" + "|".join(
+                f" {row[i].ljust(col_widths[i])} " for i in range(len(row))
+            ) + "|"
+        )
+
+    return "\n".join([divider, header_row, divider] + body_rows + [divider])
+from urllib.parse import quote
+
 def share_to_social_media(
     snapshot_title: str,
     metadata: Sequence[Tuple[str, str]],
@@ -541,43 +580,47 @@ def share_to_social_media(
 ) -> None:
     if df.empty:
         return
-    
-    image_bytes = build_table_snapshot(snapshot_title, metadata, df)
+
     safe_slug = filename_slug.replace(" ", "_").lower()
-    
-    col1, col2, col3, col4 = st.columns(4)
-    
+    ascii_table = df_to_ascii_table(df)
+
+    text = (
+        "⟫⟫ 𝑊𝐸𝐿𝐶𝑂𝑀𝐸 𝑇𝑂 𝐹𝑂𝑂𝐷 𝑅𝐸𝐶𝑂𝑀𝑀𝐸𝑁𝐷𝐸𝑅 ⟪⟪\n\n"
+        "-> Planning a feast or family dinner?\n"
+        "-> Here are crowd-favourite Indian food picks and flavourful pairings.\n\n"
+        "-> Food Insights Table:\n\n"
+        f"{ascii_table}\n\n"
+        "-> Full app:\n"
+        "https://foodrecommender1.streamlit.app/"
+    )
+
+    encoded = quote(text)
+
+    col1, col2, col3 = st.columns(3)
+
     with col1:
-        text = f"Check out these food recommendations!"
-        whatsapp_url = f"https://wa.me/?text={text}"
         st.markdown(
-            f'<a href="{whatsapp_url}" target="_blank" style="text-decoration: none;">'
-            f'<button style="background-color: #25D366; color: white; border: none; padding: 10px 20px; '
-            f'border-radius: 5px; cursor: pointer; font-size: 16px;">📱 WhatsApp</button></a>',
+            f'<a href="https://wa.me/?text={encoded}" target="_blank" style="text-decoration:none;">'
+            f'<button style="background-color:#25D366;color:white;border:none;padding:10px 20px;'
+            f'border-radius:6px;cursor:pointer;font-size:16px;">WhatsApp</button></a>',
             unsafe_allow_html=True
         )
-    
+
     with col2:
+        image_bytes = build_table_snapshot(snapshot_title, metadata, df)
         st.download_button(
-            "💾 Download Image",
+            "Download Image",
             data=image_bytes,
             file_name=f"{safe_slug}.png",
-            mime="image/png",
-            key=f"{key}_dl",
+            mime="image/png"
         )
-    
+
     with col3:
-        if st.button("📋 Copy Link", key=f"{key}_link"):
-            st.code(f"https://food-recommender.app/{safe_slug}", language=None)
-    
-    with col4:
-        csv = df.to_csv(index=False)
         st.download_button(
-            "📊 Download CSV",
-            data=csv,
+            "Download CSV",
+            data=df.to_csv(index=False),
             file_name=f"{safe_slug}.csv",
-            mime="text/csv",
-            key=f"{key}_csv_dl",
+            mime="text/csv"
         )
 
 
