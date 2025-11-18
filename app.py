@@ -420,28 +420,56 @@ def _font_height(font: ImageFont.ImageFont) -> int:
     bbox = font.getbbox("Hg")
     return bbox[3] - bbox[1]
 
+import pandas as pd
+from PIL import Image, ImageDraw, ImageFont
+import io
+import os
+
+def _load_font(font_names, size):
+    # Helper to load fonts safely
+    for font in font_names:
+        try:
+            return ImageFont.truetype(font, size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+def _font_height(font):
+    # Helper to get font height safely
+    bbox = font.getbbox("Ay")
+    return bbox[3] - bbox[1]
+
 def build_table_snapshot(
     title: str,
-    metadata: Sequence[Tuple[str, str]],
+    metadata: list,
     df: pd.DataFrame,
 ) -> bytes:
     df_str = df.fillna("").astype(str)
-    rows: List[List[str]] = [df_str.columns.tolist()] + df_str.values.tolist()
+    rows = [df_str.columns.tolist()] + df_str.values.tolist()
+    # Filter out empty metadata values
     meta_lines = [f"{label}: {value}" for label, value in metadata if value]
 
-    title_font = _load_font(["PlayfairDisplay-Regular.ttf", "arial.ttf"], 70)
-    body_font = _load_font(["arial.ttf"], 36)
-    table_font = _load_font(["arial.ttf", "Consolas.ttf"], 28)
+    # --- 1. Configuration & Fonts ---
+    title_font = _load_font(["PlayfairDisplay-Regular.ttf", "arial.ttf", "DejaVuSans.ttf"], 50)
+    body_font = _load_font(["arial.ttf", "DejaVuSans.ttf"], 24)
+    table_font = _load_font(["arial.ttf", "Consolas.ttf", "DejaVuSans.ttf"], 18)
 
-    padding_x = 25
-    padding_y = 15
-    border = 2
+    # Spacing Configuration
+    MARGIN = 50
+    PADDING_X = 20
+    PADDING_Y = 12
+    BORDER = 2
+    
+    # >> MARGIN ADJUSTMENTS HERE <<
+    GAP_TITLE_SECTION = 30   # Space between Subtitle and Metadata/Logo (Reduced from prior step)
+    GAP_TABLE_START = 40     # Space between Metadata/Logo and Table
+    
+    # NEW: Extra offset to push the logo further left from the right edge
+    LOGO_RIGHT_OFFSET = 30   # Additional margin for the logo on the right
 
-    # Determine column widths based on text measurements
+    # --- 2. Calculate Column Widths ---
     col_count = len(rows[0])
-    col_widths: List[int] = [0] * col_count
-    dummy_img = Image.new("RGB", (10, 10))
-    dummy_draw = ImageDraw.Draw(dummy_img)
+    col_widths = [0] * col_count
     for col_idx in range(col_count):
         max_width = 0
         for row in rows:
@@ -449,138 +477,144 @@ def build_table_snapshot(
             bbox = table_font.getbbox(text) if text else table_font.getbbox(" ")
             width = bbox[2] - bbox[0]
             max_width = max(max_width, width)
-        col_widths[col_idx] = max_width + padding_x * 2
+        # Constraint: Min 100px, Max 300px per column
+        col_widths[col_idx] = max(100, min(max_width + PADDING_X * 2, 300))
 
-    row_height = (_font_height(table_font)) + padding_y * 2
-    table_width = sum(col_widths) + border * (col_count + 1)
-    table_height = len(rows) * row_height + border * (len(rows) + 1)
+    row_height = (_font_height(table_font)) + PADDING_Y * 2
+    table_width = sum(col_widths) + BORDER * (col_count + 1)
+    table_height = len(rows) * row_height + BORDER * (len(rows) + 1)
 
-    margin = 80
-    meta_margin_left = margin + 30  # More margin for left-aligned metadata
-    logo_width = 0
-    logo_height = 0
+    # --- 3. Layout Calculations ---
+    
+    # A. Title Section Height
+    title_h = _font_height(title_font)
+    subtitle_h = _font_height(body_font)
+    title_block_height = title_h + 10 + subtitle_h # 10px gap between title and subtitle
+
+    # B. Metadata Section Height
+    meta_line_h = _font_height(body_font) + 10
+    meta_block_height = len(meta_lines) * meta_line_h
+
+    # C. Logo Processing
     logo_img = None
-    if os.path.exists("logo_full.png"):
-        logo_img = Image.open("logo_full.png").convert("RGBA")
+    logo_w, logo_h = 0, 0
+    
+    if os.path.exists("logo_remove.png"):
+        logo_img = Image.open("logo_remove.png").convert("RGBA")
         orig_w, orig_h = logo_img.size
+        
+        # Logo size remains large
+        target_h = max(meta_block_height + 50, 150) 
+        
+        aspect_ratio = orig_w / orig_h
+        logo_h = target_h
+        logo_w = int(logo_h * aspect_ratio)
+        logo_img = logo_img.resize((logo_w, logo_h), Image.Resampling.LANCZOS)
 
-        # Constrain the logo box to the requested bounds while maintaining aspect ratio.
-        # The user wants a box around width:1024, height:1536 and "a little bit large" -> apply a slight upscale.
-        target_box_w = 1024
-        target_box_h = 1536
-        # Compute scale to fit inside the target box while preserving aspect ratio
-        scale = min(target_box_w / orig_w, target_box_h / orig_h)
-        # Make it a little larger (e.g., 15% bigger) but still constrained by the target box
-        upscale_factor = 0.15
-        scale *= upscale_factor
-        # Ensure we don't exceed the target box after upscale
-        scale = min(scale, target_box_w / orig_w, target_box_h / orig_h)
+    # D. Determine Vertical Anchors
+    middle_block_height = max(meta_block_height, logo_h)
 
-        logo_width = max(1, int(orig_w * scale))
-        logo_height = max(1, int(orig_h * scale))
-        # Resize with high-quality resampling
-        logo_img = logo_img.resize((logo_width, logo_height), Image.Resampling.LANCZOS)
+    # Y Coordinate where the middle block (Metadata/Logo) ENDS
+    baseline_y = MARGIN + title_block_height + GAP_TITLE_SECTION + middle_block_height
 
-    width = max(1600, table_width + margin * 2)
-    base_height = (
-        margin
-        + max(_font_height(title_font), logo_height)
-        + 25
-        + _font_height(body_font)
-        + 20
-        + len(meta_lines) * (_font_height(body_font) + 10)
-        + 40
-        + table_height
-        + margin
-    )
-    height = max(base_height, 1000)
+    # Y Coordinate where the Table STARTS
+    table_start_y = baseline_y + GAP_TABLE_START
 
-    bg = (10, 77, 104)
-    panel = (4, 33, 50)
-    accent = (247, 167, 108)
+    # --- 4. Canvas Setup ---
+    width = max(table_width + (MARGIN * 2), 900)
+    height = int(table_start_y + table_height + MARGIN)
+
+    # Colors
+    bg_color = (10, 77, 104)
+    panel_color = (4, 33, 50)
+    accent_color = (247, 167, 108)
     header_fill = (14, 64, 92)
-    row_fill_even = (6, 27, 44)
-    row_fill_odd = (8, 36, 56)
+    row_even = (6, 27, 44)
+    row_odd = (8, 36, 56)
 
-    image = Image.new("RGB", (width, height), color=bg)
+    image = Image.new("RGB", (width, height), color=bg_color)
     draw = ImageDraw.Draw(image)
+
+    # Draw Outer Panel Border
     draw.rectangle(
-        [margin // 2, margin // 2, width - margin // 2, height - margin // 2],
-        fill=panel,
-        outline=accent,
-        width=4,
+        [MARGIN // 2, MARGIN // 2, width - MARGIN // 2, height - MARGIN // 2],
+        fill=panel_color, outline=accent_color, width=3,
     )
 
-    # Place logo at top right, preserving aspect ratio and transparency
-    cursor_y = margin
+    # --- 5. Draw Header Elements ---
+
+    # Draw Title
+    cursor_y = MARGIN + 10
+    draw.text((MARGIN + 20, cursor_y), title, fill=accent_color, font=title_font)
+    
+    # Draw Subtitle
+    cursor_y += title_h + 10
+    draw.text((MARGIN + 20, cursor_y), "CraveMap Snapshot", fill=(230, 230, 230), font=body_font)
+
+    # -- Metadata & Logo Alignment --
+
+    # Draw Metadata (Bottom aligned to baseline_y)
+    meta_start_y = baseline_y - meta_block_height
+    for i, line in enumerate(meta_lines):
+        line_y = meta_start_y + (i * meta_line_h)
+        draw.text((MARGIN + 20, line_y), line, fill=(200, 200, 200), font=body_font)
+
+    # Draw Logo (Bottom aligned to baseline_y)
     if logo_img:
-        # Ensure the logo does not overflow the canvas
-        logo_x = max(margin, width - margin - logo_width)
-        image.paste(logo_img, (logo_x, cursor_y), logo_img)
-    # Center the title
-    title_bbox = title_font.getbbox(title)
-    title_width = title_bbox[2] - title_bbox[0]
-    title_x = (width - title_width) // 2
-    draw.text((title_x, cursor_y), title, fill=accent, font=title_font)
-    cursor_y += _font_height(title_font) + 15
+        # MODIFIED: Increased right margin by subtracting the LOGO_RIGHT_OFFSET
+        logo_x = width - MARGIN - logo_w - LOGO_RIGHT_OFFSET
+        logo_draw_y = baseline_y - logo_h
+        image.paste(logo_img, (logo_x, int(logo_draw_y)), mask=logo_img)
 
-    # Center subtitle
-    subtitle = "CraveMap Snapshot"
-    subtitle_bbox = body_font.getbbox(subtitle)
-    subtitle_width = subtitle_bbox[2] - subtitle_bbox[0]
-    subtitle_x = (width - subtitle_width) // 2
-    draw.text((subtitle_x, cursor_y), subtitle, fill=(230, 230, 230), font=body_font)
-    cursor_y += _font_height(body_font) + 15
-
-    # Left-align metadata with more margin
-    meta_y = cursor_y
-    for line in meta_lines:
-        draw.text((meta_margin_left, meta_y), line, fill=(255, 255, 255), font=body_font)
-        meta_y += _font_height(body_font) + 10
-
-    cursor_y = meta_y + 20
-    # Center the table
-    table_top = cursor_y
-    table_x = (width - table_width) // 2
+    # --- 6. Draw Table ---
+    
+    table_x = (width - table_width) // 2 
+    
+    # Table Border
     draw.rectangle(
-        [table_x, table_top, table_x + table_width, table_top + table_height],
-        outline=accent,
-        width=border,
+        [table_x, table_start_y, table_x + table_width, table_start_y + table_height],
+        outline=accent_color, width=BORDER
     )
 
-    y_cursor = table_top + border
+    y_cursor = table_start_y + BORDER
     for row_idx, row in enumerate(rows):
-        x_cursor = table_x + border
+        x_cursor = table_x + BORDER
         is_header = row_idx == 0
-        row_fill = header_fill if is_header else (row_fill_even if row_idx % 2 == 0 else row_fill_odd)
-        stroke_color = accent if is_header else (255, 255, 255)
+        
+        # Row Colors
+        row_fill = header_fill if is_header else (row_even if row_idx % 2 == 0 else row_odd)
+        text_color = accent_color if is_header else (255, 255, 255)
 
         for col_idx, value in enumerate(row):
             cell_width = col_widths[col_idx]
-            cell_height = row_height
+            
+            # Draw Cell Background
             draw.rectangle(
-                [x_cursor, y_cursor, x_cursor + cell_width, y_cursor + cell_height],
-                fill=row_fill,
-                outline=stroke_color,
-                width=border,
+                [x_cursor, y_cursor, x_cursor + cell_width, y_cursor + row_height],
+                fill=row_fill, outline=(100, 100, 100), width=1
             )
 
+            # Draw Text (Centered)
             text = str(value)
+            if len(text) > 35: text = text[:32] + "..."
+            
             bbox = table_font.getbbox(text) if text else table_font.getbbox(" ")
-            text_width = bbox[2] - bbox[0]
-            text_height = bbox[3] - bbox[1]
-            text_x = x_cursor + (cell_width - text_width) / 2
-            text_y = y_cursor + (cell_height - text_height) / 2
-            draw.text((text_x, text_y), text, fill=(255, 255, 255), font=table_font)
+            text_w = bbox[2] - bbox[0]
+            text_h = bbox[3] - bbox[1]
+            
+            text_x = x_cursor + (cell_width - text_w) / 2
+            text_y = y_cursor + (row_height - text_h) / 2
+            
+            draw.text((text_x, text_y), text, fill=text_color, font=table_font)
+            x_cursor += cell_width + BORDER
+            
+        y_cursor += row_height + BORDER
 
-            x_cursor += cell_width + border
-        y_cursor += row_height + border
-
-    buffer = BytesIO()
+    # Output
+    buffer = io.BytesIO()
     image.save(buffer, format="PNG")
     buffer.seek(0)
     return buffer.getvalue()
-
 from urllib.parse import quote
 def df_to_ascii_table(df: pd.DataFrame) -> str:
     """Convert DataFrame to a simple clean ASCII table."""
@@ -726,7 +760,7 @@ st.sidebar.metric("Loaded restaurants", len(restaurants))
 # Reduced vertical margin (smaller gap than before)
 st.sidebar.markdown("<div style='margin-top: -10px;'></div>", unsafe_allow_html=True)
 
-with st.sidebar.expander("👨‍🍳 Behind the Tadka (i)", expanded=False):
+with st.sidebar.expander("👨‍🍳 Behind the Tadka ℹ️", expanded=False):
     st.markdown(
         """
         <div style='line-height: 1.50; text-align: justify; font-size: 0.88rem; margin-top: -4px;'>
@@ -1087,7 +1121,7 @@ footer_html = f"""
     <img src="data:image/png;base64,{title_base64}" alt="CraveMap" 
          style="height: 20px; vertical-align: middle; margin-right: 1px;">
     is charted with flavour, seasoned with data, and served with ❤️ by 
-    <a href="https://www.linkedin.com/in/yash-jangid-7131162a0/" target="_blank">Yash Jangid</a> · 
+    <a href="https://github.com/jangidyash59" target="_blank">Yash Jangid</a> · 
     <a href="mailto:jangidworld59@gmail.com">jangidworld59@gmail.com</a>
 </div>
 """
