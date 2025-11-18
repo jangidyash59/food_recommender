@@ -18,8 +18,8 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 # Page config + global styles
 # ---------------------------------------------------------------------
 st.set_page_config(
-    page_title="Indian Food Recommender",
-    page_icon="🍴",
+    page_title="CraveMap - Indian Food Recommender",
+    page_icon="🍴CM",
     layout="wide",
 )
 
@@ -484,7 +484,7 @@ def build_table_snapshot(
     cursor_x = (width - table_width) // 2
     draw.text((cursor_x, cursor_y), title, fill=accent, font=title_font)
     cursor_y += _font_height(title_font) + 15
-    draw.text((cursor_x, cursor_y), "Food Recommender Snapshot", fill=(230, 230, 230), font=body_font)
+    draw.text((cursor_x, cursor_y), "CraveMap Snapshot", fill=(230, 230, 230), font=body_font)
     cursor_y += _font_height(body_font) + 15
 
     for line in meta_lines:
@@ -585,13 +585,14 @@ def share_to_social_media(
     ascii_table = df_to_ascii_table(df)
 
     text = (
-        "⟫⟫ 𝑊𝐸𝐿𝐶𝑂𝑀𝐸 𝑇𝑂 𝐹𝑂𝑂𝐷 𝑅𝐸𝐶𝑂𝑀𝑀𝐸𝑁𝐷𝐸𝑅 ⟪⟪\n\n"
-        "-> Planning a feast or family dinner?\n"
-        "-> Here are crowd-favourite Indian food picks and flavourful pairings.\n\n"
-        "-> Food Insights Table:\n\n"
-        f"{ascii_table}\n\n"
-        "-> Full app:\n"
-        "https://foodrecommender1.streamlit.app/"
+        "⟫⟫ 𝐖𝐄𝐋𝐂𝐎𝐌𝐄 𝐓𝐎 ✦ 𝐂𝐑𝐀𝐕𝐄𝐌𝐀𝐏 ✦ ⟪⟪\n\n"
+        "-> Planning a feast or a family dinner?\n"
+        "-> Explore crowd-favourite Indian dishes and their perfect pairings!\n"
+        "-> 𝐅𝐨𝐨𝐝 𝐈𝐧𝐬𝐢𝐠𝐡𝐭𝐬 𝐓𝐚𝐛𝐥𝐞:\n"
+        f"{ascii_table}\n"
+        "-> Try the full app here:\n"
+        "https://foodrecommender1.streamlit.app/\n"
+        " Share CraveMap and spread the flavours of India "
     )
 
     encoded = quote(text)
@@ -631,7 +632,28 @@ def explanation_block(title: str, steps: List[str]) -> None:
 
 
 def render_hero() -> None:
-    st.markdown('<div class="hero-title">Food Recommender</div>', unsafe_allow_html=True)
+    # Render a left title image and a right logo image without adding extra widgets
+    # that would change the subsequent layout of the tabs.
+    # Use a narrower right column so images occupy less area.
+    st.markdown("<div style='margin-top: 20px;'></div>", unsafe_allow_html=True)
+    col_left, col_right = st.columns([9, 1])
+
+    # Left: title graphic (fallback to text if image missing)
+    with col_left:
+        if os.path.exists("title.png"):
+            # reduce displayed size
+            st.image("title.png", width=360)
+        else:
+            st.markdown(
+                '<div class="hero-title">CraveMap - Indian Food Recommender</div>',
+                unsafe_allow_html=True,
+            )
+
+    # Right: compact logo aligned to the right (fallback to nothing if missing)
+    with col_right:
+        if os.path.exists("logo.png"):
+            # keep logo very compact so it doesn't push layout
+            st.image("logo.png", width=120)
 
 
 # ---------------------------------------------------------------------
@@ -745,7 +767,7 @@ with tab_food:
             height=min(400, 80 + 32 * len(df_summary)),
         )
         share_to_social_media(
-            "Food Recommender",
+            "CraveMap - Indian Food Recommender",
             [
                 ("Dish name", st.session_state.food_result.get("dish", "").title()),
                 ("Diet preference", diet_filter_food),
@@ -796,7 +818,7 @@ with tab_food:
             )
             meta = st.session_state.food_pairs.get("meta", {})
             share_to_social_media(
-                "Food Recommender",
+                "CraveMap - Indian Food Recommender",
                 [
                     ("Restaurant", meta.get("restaurant", "")),
                     ("Dish name", meta.get("dish", "")),
@@ -854,7 +876,7 @@ with tab_state:
             height=min(420, 80 + 34 * len(df_top_display)),
         )
         share_to_social_media(
-            "Food Recommender",
+            "CraveMap - Indian Food Recommender",
             [
                 ("Diet preference", diet_filter_state),
                 ("State focus", display_map.get(chosen_state_for_top, chosen_state_for_top)),
@@ -928,7 +950,7 @@ with tab_state:
                 )
                 meta = st.session_state.state_pairs.get("meta", {})
                 share_to_social_media(
-                    "Food Recommender",
+                    "CraveMap - Indian Food Recommender",
                     [
                         ("Restaurant", meta.get("restaurant", "")),
                         ("Diet preference", meta.get("diet", "")),
